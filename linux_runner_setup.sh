@@ -7,6 +7,8 @@ if [ "$EUID" -ne 0 ]
   exit
 fi
 
+PREFIX="/opt/circleci"
+
 # Confirm installation target
 PS3='Installation target?: '
 options=("Linux x86_64" "Linux ARM64")
@@ -28,10 +30,10 @@ done
 
 # Ask the user for the runner auth token and runner name
 echo "Runner auth token: "
-read auth_token
+read RUNNER_TOKEN
 
 echo "Runner name: "
-read runner_name
+read RUNNER_NAME
 
 # set boolean for working directory to be cleaned up
 PS3='Cleanup working directory?: '
@@ -52,8 +54,7 @@ do
 done
 
 # From https://circleci.com/docs/2.0/runner-installation/index.html#installation
-prefix=/opt/circleci
-mkdir -p "$prefix/workdir"
+mkdir -p "$PREFIX/workdir"
 base_url="https://circleci-binary-releases.s3.amazonaws.com/circleci-launch-agent"
 echo "Determining latest version of CircleCI Launch Agent"
 agent_version=$(curl "$base_url/release.txt")
@@ -71,33 +72,27 @@ if ! sha256sum --check --ignore-missing checksums.txt; then
     exit 1
 fi
 chmod u+x "$file"
-cp "$file" "$prefix/circleci-launch-agent"
+cp "$file" "$PREFIX/circleci-launch-agent"
 
-#https://circleci.com/docs/2.0/runner-installation/index.html#installing-the-circleci-runner-on-linux
-mkdir -p '/opt/circleci'
-cat > '/opt/circleci/launch-agent-config.yaml' << EOM
+#Create Runner agent config file (yaml)
+cat <<EOF > launch-agent-config.yaml
 api:
-  auth_token: $auth_token
+  auth_token: $RUNNER_TOKEN
 runner:
-  name: $runner_name
-  command_prefix: ["/opt/circleci/launch-task"]
-  working_directory: /opt/circleci/workdir/%s
+  name: $RUNNER_NAME
+  command_prefix: ["$PREFIX/launch-task"]
+  working_directory: $PREFIX/workdir/%s
   cleanup_working_directory: $WORKING_DIRECTORY
-EOM
+EOF
 
-chmod 600 /opt/circleci/launch-agent-config.yaml
-
-#https://circleci.com/docs/2.0/runner-installation/index.html#create-the-circleci-user-working-directory
+# Create the CircleCI user + working dir
 id -u circleci &>/dev/null || adduser --uid 1500 --disabled-password --gecos GECOS circleci
+echo "circleci ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+mkdir -p $PREFIX/workdir
+chown -R circleci:circleci $PREFIX/workdir
 
-mkdir -p /opt/circleci/workdir
-chown -R circleci /opt/circleci/workdir
-
-#https://circleci.com/docs/2.0/runner-installation/index.html#install-the-launch-script
-echo "Installing the launch script"
-mkdir -p /opt/circleci
-
-cat > '/opt/circleci/launch-task' << EOM
+# Create Launch script
+cat <<'EOF' > $PREFIX/launch-task
 #!/bin/bash
 set -euo pipefail
 ## This script launches the build-agent using systemd-run in order to create a
@@ -117,11 +112,14 @@ trap abort EXIT
 systemd-run \
     --pipe --collect --quiet --wait \
     --uid "$USER_ID" --unit "$unit" -- "$@"
-EOM
+EOF
 
-chmod 755 /opt/circleci/launch-task
+# Assign ownership and access to file
+sudo chown root: $PREFIX/launch-task
+sudo chmod 755 $PREFIX/launch-task
 
-cat > '/opt/circleci/circleci.service' << EOM 
+# Create and enable systemd unit for this service
+cat <<'EOF' > $PREFIX/circleci.service
 [Unit]
 Description=CircleCI Runner
 After=network.target
@@ -130,21 +128,25 @@ ExecStart=/opt/circleci/circleci-launch-agent --config /opt/circleci/launch-agen
 Restart=always
 User=root
 NotifyAccess=exec
-TimeoutStopSec=18300
+TimeoutStopSec=600
 [Install]
 WantedBy = multi-user.target
-EOM
+EOF
 
-chmod 755 /opt/circleci/circleci.service
+# Assign ownership and access to file
+sudo chown root: $PREFIX/circleci.service
+sudo chmod 755 $PREFIX/circleci.service
 
-prefix=/opt/circleci
-echo "Enabling the service..."
-systemctl enable $prefix/circleci.service
+# Move file and set permissions to root
+mv launch-agent-config.yaml  $PREFIX/launch-agent-config.yaml
+chown root: $PREFIX/launch-agent-config.yaml
+chmod 600 $PREFIX/launch-agent-config.yaml
 
-echo "Starting the service..."
+# Enable + Start the srvice
+systemctl enable $PREFIX/circleci.service
 systemctl start circleci.service
 
-echo "Checking the status... "
+#Show status of the service
 systemctl status circleci.service --no-pager
 
 echo "Checking logs... "
