@@ -32,7 +32,7 @@ done
 echo "Runner auth token: "
 read RUNNER_TOKEN
 
-echo "Runner name: "
+echo "Runner name (i.e. <your-namespace>/<this-is-your-runner-name-here>): "
 read RUNNER_NAME
 
 # set boolean for working directory to be cleaned up
