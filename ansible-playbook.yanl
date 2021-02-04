@@ -1,0 +1,100 @@
+- name: Create CircleCI user
+  user:
+    name: "{{ circleci_user }}"
+    home: /home/{{ circleci_user }}
+    comment: "GECOS circleci"
+    uid: 1500
+  become: yes
+- name: Create base directory
+  file:
+    path: "{{ install_base }}"
+    state: directory
+    mode: 0755
+  become: yes
+- name: Create working directory
+  file:
+    path: "{{ install_base }}/workdir"
+    state: directory
+    mode: 0755
+    owner: "{{ circleci_user }}"
+    group: "{{ circleci_user }}"
+  become: yes
+# set secret management
+- set_fact:
+    # to do: secret manager info here
+- name: Deploy config file
+  template:
+    src: "launch-agent-config.yaml.j2"
+    dest: "{{ install_base }}/launch-agent-config.yaml"
+    owner: root
+    group: root
+    mode: 0600
+  become: yes
+- name: Deploy launch-task file
+  template:
+    src: "launch-task.j2"
+    dest: "{{ install_base }}/launch-task"
+    owner: root
+    group: root
+    mode: 0755
+  become: yes
+- name: Get current agent version
+  uri:
+    url: "{{ binary_download_base_url }}/{{ release_file }}"
+    return_content: yes
+  register: agent_version
+- set_fact:
+    agent_version: "{{ agent_version.content | replace('\n','') }}"
+- name: Get checksum binary
+  get_url:
+    url: "{{ binary_download_base_url }}/{{ agent_version }}/{{ checksums_file }}"
+    dest: "{{ install_base }}/checksums.txt"
+    mode: '0600'
+  become: yes
+- name: Get checksum and file name
+  command: "grep -F '{{ platform }}' {{ install_base }}/checksums.txt"
+  register: checksum_and_filename
+- set_fact:
+    file_name: "{{ checksum_and_filename.stdout.split(' ')[1] | replace('*','') }}"
+- set_fact:
+    checksum: "{{ checksum_and_filename.stdout.split(' ')[0] }}"
+- name: curl runner binary
+  command: "curl --compressed -L '{{ binary_download_base_url }}/{{ agent_version }}/{{ file_name }}' -o '{{ install_base }}/circleci-launch-agent'"
+- name: Get binary status
+  stat:
+    path: "{{ install_base }}/circleci-launch-agent"
+    checksum_algorithm: sha256
+  register: runner_stat
+- name: Remove runner binary if checksums do not match
+  file:
+    path:  "{{ install_base }}/circleci-launch-agent"
+    state: absent
+  when: runner_stat.stat.checksum != checksum
+- fail:
+    msg: "Runner checksum failed"
+  when: runner_stat.stat.checksum != checksum
+- name: Set permissions
+  file:
+    path: "{{ install_base }}/circleci-launch-agent"
+    mode: 0700
+    owner: root
+    group: root
+- name: Deploy service definition
+  template:
+    src: "systemd.service.j2"
+    dest: "/etc/systemd/system/{{ circleci_service_name }}.service"
+    owner: root
+    group: root
+    mode: 0655
+  become: yes
+- name: Install service
+  systemd:
+    name: "{{ circleci_service_name }}"
+    enabled: yes
+    state: started
+    daemon_reload: yes
+  become: yes
+- name: Remove checksum
+  file:
+    path: "{{ install_base }}/checksums.txt"
+    state: absent
