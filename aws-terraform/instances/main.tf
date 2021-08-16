@@ -1,5 +1,3 @@
-# https://learn.hashicorp.com/tutorials/terraform/cloud-init
-
 terraform {
   required_version = "~> 1.0.0"
   required_providers {
@@ -32,11 +30,11 @@ data "aws_ami" "ubuntu" {
 }
 
 
-resource "aws_security_group" "sg_22_80" {
+resource "aws_security_group" "sg_22_443" {
   name   = "runner_terraform_sg"
   vpc_id = var.vpc_id
 
-  # SSH access from the VPC
+  # to SSH in
   ingress {
     from_port   = 22
     to_port     = 22
@@ -44,6 +42,7 @@ resource "aws_security_group" "sg_22_80" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # to look for work
   egress {
     from_port   = 443
     to_port     = 443
